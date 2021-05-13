@@ -4,7 +4,7 @@
 
 extern "C" {
 #include <libavformat/avformat.h>
-
+#include <libswresample/swresample.h>
 }
 
 
@@ -57,6 +57,34 @@ Java_com_hqk_ndk_1audio_MainActivity_playMusic(JNIEnv *env, jobject thiz, jstrin
     avcodec_open2(avCodecContext, avCodec, NULL);
     //9、拿到编码数据 压缩数据 AAC
     AVPacket *avPacket = av_packet_alloc(); // 打饭 拿 餐具
+    // TODO 重采样 准备
+    // 输入 （信息） 可以是不同的，但是输出必须固定
+    SwrContext *swrContext = swr_alloc();
+    //输入的信息
+    AVSampleFormat in_sample_fmt = avCodecContext->sample_fmt;//输入的采样格式，媒体是什么就获取什么
+    int in_sample_rate = avCodecContext->sample_rate;//输入的采样率
+    int in_channel_layout = avCodecContext->channel_layout;//输入的 声道 布局
+
+    //输出的信息
+    AVSampleFormat out_sample_fmt = AV_SAMPLE_FMT_S16;//输入的采样格式，媒体是什么就获取什么
+    int out_sample_rate = 44100;//输入的采样率
+    int out_channel_layout = AV_CH_LAYOUT_STEREO;//输入的 声道 布局
+
+    //真正的转换
+    swr_alloc_set_opts(swrContext,
+                       out_channel_layout, out_sample_fmt, out_sample_rate,// 输出相关信息
+                       in_channel_layout, in_sample_fmt, in_sample_rate,// 输入相关信息
+                       0, NULL);
+
+    //处理一下细节，简单初始化，否则有一点点小毛病，播放的时候有点，吃吃吃的声音
+    swr_init(swrContext);
+
+    // 定义缓存  输出的
+    uint8_t *out_buffer = (uint8_t *) (av_malloc(2 * out_sample_rate));
+
+    //文件
+    FILE *pcm = fopen(outputStr, "wb");
+
     //10、拿到原始数据
     while (av_read_frame(avFormatContext, avPacket) >= 0) {
         avcodec_send_packet(avCodecContext, avPacket);  //要打哪些菜
@@ -76,7 +104,18 @@ Java_com_hqk_ndk_1audio_MainActivity_playMusic(JNIEnv *env, jobject thiz, jstrin
         }
         //真正解码中。。。
         //声卡 要求 音频 输出的格式统一 （采用率统一，通道数统一，。。。）
+        // 吧PCM 原始音频数据 --》 统一处理--》建立统一格式
+        swr_convert(swrContext,
+                //输出相关的
+                    &out_buffer, 2 * out_sample_rate,
+                //输入相关的
+                    (const uint8_t **) (avFrame->data), avFrame->nb_samples
+        );
 
+        //最后一步，写到文件里面去
+        int out_buff_size = av_samples_get_buffer_size(NULL, 2, avFrame->nb_samples, out_sample_fmt,
+                                                       1);
+        fwrite(out_buffer, 1, out_buff_size, pcm);
 
     }
 
